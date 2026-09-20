@@ -2,19 +2,19 @@
 name = "monitoramento-bgp"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = ["mrtparse>=2.2", "confluent-kafka>=2.15"]
 
 [dependency-groups]
-dev = ["pytest>=8.4", "confluent-kafka>=2.15"]
+dev = ["pytest>=8.4"]
 
 [tool.pytest.ini_options]
 testpaths = ["testes"]
+pythonpath = ["."]
 markers = [
     "integracao: exige o docker-compose no ar (broker Kafka)",
 ]
 addopts = "-m 'not integracao'"
 
 [tool.uv]
-# O binding C do pybgpstream (fase 2) compila contra o Python da venv; ela tem
-# que ser o Python do sistema, nunca um interpretador gerenciado pelo uv.
+# A venv usa o Python do sistema, nunca um interpretador gerenciado pelo uv.
 python-preference = "only-system"

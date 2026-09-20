@@ -16,3 +16,6 @@ derivador/.gradle/
 
 # Kafka local
 dados-kafka/
+
+# Cache de arquivos MRT baixados pelo replay
+dados-mrt/

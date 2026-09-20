@@ -47,19 +47,32 @@ wheels = [
 name = "monitoramento-bgp"
 version = "0.1.0"
 source = { virtual = "." }
+dependencies = [
+    { name = "confluent-kafka" },
+    { name = "mrtparse" },
+]
 
 [package.dev-dependencies]
 dev = [
-    { name = "confluent-kafka" },
     { name = "pytest" },
 ]
 
 [package.metadata]
+requires-dist = [
+    { name = "confluent-kafka", specifier = ">=2.15" },
+    { name = "mrtparse", specifier = ">=2.2" },
+]
 
 [package.metadata.requires-dev]
-dev = [
-    { name = "confluent-kafka", specifier = ">=2.15" },
-    { name = "pytest", specifier = ">=8.4" },
+dev = [{ name = "pytest", specifier = ">=8.4" }]
+
+[[package]]
+name = "mrtparse"
+version = "2.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/7c/06/2198d92180b3abd998b057621bb2843e2a596b550bb10adc649884142359/mrtparse-2.2.0.tar.gz", hash = "sha256:8806e20f57dfbbcdc107a9838af9d5386dacdc6d43474bfedeeacd80eb3945d4", size = 34842, upload-time = "2022-05-23T16:30:23.993Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/97/b2/e8035b3854081b707c56a7bf07240da3fc880c28464b1d67a77cbdf2db45/mrtparse-2.2.0-py2.py3-none-any.whl", hash = "sha256:1672a92950eafb8fb5f6b56fe4c4ce0ebae8ec87de7b1489df7780418c311ca7", size = 19116, upload-time = "2022-05-23T16:30:22.142Z" },
 ]
 
 [[package]]
