@@ -6,6 +6,11 @@ dependencies = ["mrtparse>=2.2", "confluent-kafka>=2.15"]
 
 [dependency-groups]
 dev = ["pytest>=8.4"]
+# Grupo fora do padrao, nao instalado por `uv sync`: pybgpstream so compila com a
+# biblioteca C libBGPStream no sistema (no Arch, `yay -S bgpstream`). Nada do
+# produtor depende dele; so a captura de fixtures multi-coletor do capturar.py.
+#   uv sync --group captura
+captura = ["pybgpstream>=2.0.2"]
 
 [tool.pytest.ini_options]
 testpaths = ["testes"]
