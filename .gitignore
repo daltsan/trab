@@ -1,0 +1,18 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Java / Gradle
+derivador/build/
+derivador/.gradle/
+*.class
+
+# IntelliJ
+.idea/
+*.iml
+
+# Kafka local
+dados-kafka/

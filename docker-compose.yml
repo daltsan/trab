@@ -1,0 +1,60 @@
+# Kafka em modo KRaft (sem Zookeeper): um único nó acumula os papéis de broker e
+# de controller. Suficiente para o laboratório; não é topologia de produção.
+services:
+  kafka:
+    image: apache/kafka:4.3.1
+    container_name: bgp-kafka
+    ports:
+      - "9092:9092"
+    environment:
+      CLUSTER_ID: bgp-soe-ufes-kraft01
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNO
+      # EXTERNO é o que o host enxerga; INTERNO é o que os containers usam.
+      KAFKA_LISTENERS: EXTERNO://:9092,INTERNO://:19092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: EXTERNO://localhost:9092,INTERNO://kafka:19092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,EXTERNO:PLAINTEXT,INTERNO:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_LOG_DIRS: /var/lib/kafka/dados
+    volumes:
+      - ./dados-kafka:/var/lib/kafka/dados
+    healthcheck:
+      test: ["CMD", "/opt/kafka/bin/kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+
+  # Serviço de uma tacada só: cria os três tópicos do PLANO.md e termina.
+  criar-topicos:
+    image: apache/kafka:4.3.1
+    container_name: bgp-criar-topicos
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      '
+      t() { /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --replication-factor 1 --topic "$$1" --partitions "$$2"; };
+      t bgp.updates 3 &&
+      t bgp.alertas 1 &&
+      t bgp.derivados 1
+      '
+
+  kafka-ui:
+    image: kafbat/kafka-ui:v1.5.0
+    container_name: bgp-kafka-ui
+    ports:
+      - "8080:8080"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_CLUSTERS_0_NAME: bgp
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:19092
