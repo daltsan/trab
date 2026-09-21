@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:ceturb.es.gov.br)",
+      "WebFetch(domain:dados.es.gov.br)",
+      "WebFetch(domain:github.com)"
+    ]
+  }
+}

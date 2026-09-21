@@ -65,6 +65,38 @@ com o prefixo como chave.
 `--replay` existe para mostrar que a fixture não é maquiagem — ele busca os mesmos dados na
 fonte original.
 
+## Detector
+
+Consome `bgp.updates`, aplica as situações S1, S2 e S3 sobre cada evento e publica os alertas em
+`bgp.alertas`, com o prefixo como chave.
+
+```bash
+# a linha de base prefixo -> AS legítimo tem que existir antes (o detector lê esse JSON)
+.venv/bin/python produtor/produtor.py --linha-base testes/dados/rib_youtube.jsonl \
+    --saida produtor/linha_base.json
+
+# fica no ar consumindo o que chegar em bgp.updates
+.venv/bin/python detector/detector.py
+
+# lê o tópico desde o início e para depois de N eventos (útil para conferir uma demonstração)
+.venv/bin/python detector/detector.py --do-inicio --limite 400
+```
+
+No fim da execução ele imprime no `stderr` a contagem por situação. Alimentado com a fixture de
+2008 o resultado é `S1=273, S2=273, S3=40`: o `/24` sequestrado pela AS 17557 acende S1 e S2 em
+cada um dos 273 anúncios, os dois `/25` do próprio YouTube acendem S3 por serem mais específicos
+que `/24`, e o contra-anúncio do dono no `/24` não acende nada.
+
+| Situação | Quando dispara | Severidade |
+|---|---|---|
+| S1 · origem inesperada | a origem do anúncio difere da esperada na linha de base | média |
+| S2 · sub-prefixo | S1 e o prefixo é mais específico que o da linha de base | alta |
+| S3 · caminho inválido | laço no `AS_PATH`, prefixo bogon, ou mais específico que `/24` (`/48` em IPv6) | média |
+
+A origem esperada vem do prefixo exato na linha de base ou, na falta dele, do prefixo mais
+específico que o cobre — o `/24` sequestrado em 2008 só é julgado porque a RIB tem o `/22` que o
+contém. Prefixo fora desse espaço fica quieto, que é o que mantém o modo `--live` silencioso.
+
 ## Fixtures
 
 Os dados de teste são eventos BGP reais capturados em arquivo, nunca inventados à mão.
@@ -111,7 +143,7 @@ pronto.
 |---|---|
 | 1 · Infraestrutura Kafka | pronta |
 | 2 · Produtor | pronta |
-| 3 · Detector (S1, S2, S3) | a fazer |
+| 3 · Detector (S1, S2, S3) | pronta |
 | 4 · Derivador Java (D1, D2) | a fazer |
 | 5 · Painel | a fazer |
 | 6 · Ensaio da apresentação | a fazer |
