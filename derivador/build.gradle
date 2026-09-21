@@ -1,0 +1,30 @@
+plugins {
+    id 'application'
+}
+
+repositories {
+    mavenCentral()
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+application {
+    mainClass = 'ufes.soe.bgp.Derivador'
+}
+
+dependencies {
+    implementation 'org.apache.kafka:kafka-streams:4.3.1'
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.22.2'
+
+    testImplementation 'org.apache.kafka:kafka-streams-test-utils:4.3.1'
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.14.4'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
+}
