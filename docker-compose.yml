@@ -41,10 +41,10 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command: >
       '
-      t() { /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --replication-factor 1 --topic "$$1" --partitions "$$2"; };
+      t() { /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --create --if-not-exists --replication-factor 1 --topic "$$1" --partitions "$$2" $$3; };
       t bgp.updates 3 &&
       t bgp.alertas 1 &&
-      t bgp.derivados 1
+      t bgp.derivados 1 "--config retention.ms=-1"
       '
 
   kafka-ui:

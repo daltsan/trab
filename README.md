@@ -31,7 +31,7 @@ O Kafka UI fica em <http://localhost:8080> e o broker em `localhost:9092`.
 ```bash
 .venv/bin/pytest                # unidade: sem rede, sem broker, roda sempre
 .venv/bin/pytest -m integracao  # exige o docker compose no ar
-./gradlew test                  # derivador Java (fase 4)
+cd derivador && ./gradlew test  # derivador Java — o wrapper vive dentro de derivador/
 ```
 
 A lógica de decisão é função pura e os testes de unidade são dicionário entrando e lista saindo.
@@ -97,6 +97,86 @@ A origem esperada vem do prefixo exato na linha de base ou, na falta dele, do pr
 específico que o cobre — o `/24` sequestrado em 2008 só é julgado porque a RIB tem o `/22` que o
 contém. Prefixo fora desse espaço fica quieto, que é o que mantém o modo `--live` silencioso.
 
+## Derivador
+
+Aplicação Kafka Streams com duas fontes. D1 consome os alertas **S1** de `bgp.alertas`, agrupa por
+`(prefixo, AS suspeito)` numa janela fixa de 5 minutos e publica `sequestro_confirmado` em
+`bgp.derivados` quando três coletores distintos concordam. D2 consome `bgp.updates`, agrupa por
+`(prefixo, peer_as)` na mesma janela e publica `rota_instavel` a partir de 4 alternâncias
+anúncio↔retirada. Nos dois casos a chave da saída é o prefixo.
+
+O tempo da janela vem do campo `timestamp` do evento, nunca do relógio: sem isso o replay de 2008
+cairia inteiro numa janela de "agora".
+
+```bash
+cd derivador
+
+./gradlew test                  # 13 testes em memória, sem broker e sem Docker
+./gradlew run                   # fica no ar: bgp.alertas + bgp.updates -> bgp.derivados
+KAFKA_BOOTSTRAP=outro:9092 ./gradlew run
+```
+
+| Evento derivado | Quando dispara | Campos próprios |
+|---|---|---|
+| `sequestro_confirmado` | 3 coletores distintos veem o mesmo S1 na janela | `coletores`, `confianca`, `janela_inicio`, `janela_fim` |
+| `rota_instavel` | 4 alternâncias anúncio↔retirada do mesmo `(prefixo, peer_as)` | `peer_as`, `alternancias`, `janela_inicio`, `janela_fim` |
+
+`confianca = 1 - 1/n_coletores`, em duas casas: 0,67 com três coletores. A emissão é uma por
+janela, no instante em que o limiar é cruzado — o alerta chega durante o incidente, não cinco
+minutos depois.
+
+O mesmo dá para ver no Kafka UI em <http://localhost:8080>, que é o caminho da apresentação.
+Esperado: `sequestro_confirmado` do `208.65.153.0/24`, `as_suspeito` 17557, `as_legitimo` 36561.
+
+## Painel e consumidor de ações
+
+Consome `bgp.alertas` e `bgp.derivados` numa thread e serve o estado em HTTP na outra. O estado é
+acumulado **por prefixo**: contagem por situação, coletores distintos, AS suspeito e AS legítimo,
+severidade máxima, primeiro e último instante, e a marca de sequestro confirmado quando o evento
+derivado daquele prefixo chega.
+
+```bash
+.venv/bin/python painel/painel.py                 # http://localhost:8000
+.venv/bin/python painel/painel.py --porta 9000 --do-inicio --grupo painel-2
+```
+
+| Rota | Conteúdo |
+|---|---|
+| `/` | página HTML única, CSS embutido, recarga automática a cada 2 s |
+| `/dados` | o mesmo estado em JSON (é o que o teste de integração consulta) |
+
+A tabela ordena confirmados primeiro, depois por severidade, depois por recência — o prefixo
+sequestrado fica na primeira linha e em vermelho, que é o clímax da apresentação. A recarga é
+`<meta http-equiv="refresh">` em vez de polling em JavaScript: menos código, funciona sem internet
+e num projetor o efeito é o mesmo.
+
+O **consumidor de ações é este mesmo processo**: cada evento derivado que chega imprime a
+notificação no `stderr`, ao lado do painel.
+
+```
+[!] SEQUESTRO CONFIRMADO 208.65.153.0/24: AS 17557 anuncia bloco da AS 36561, 3 coletores, confianca 0.67
+```
+
+## Ensaio ponta a ponta
+
+`ensaio.sh` sobe a demonstração inteira na ordem certa e derruba tudo no fim:
+
+```bash
+./ensaio.sh              # painel em http://localhost:8000
+PORTA=9000 ./ensaio.sh
+```
+
+Ele espera o broker ficar de pé, gera a linha de base a partir de `rib_youtube.jsonl`, sobe
+detector, painel e derivador em segundo plano (cada um com grupo novo, para não reler o ensaio
+anterior), republica `hijack_youtube.jsonl` em `bgp.updates` e fica esperando o
+`sequestro_confirmado` aparecer no `/dados` do painel. `Ctrl-C` derruba o que ele subiu; o broker
+fica de pé, porque quem sobe o `docker compose` é você.
+
+Medido em 26/09/2026, com o derivador Java no ar: o `sequestro_confirmado` do `208.65.153.0/24`
+(AS 17557 contra a AS 36561) chegou ao painel **16 s** depois do produtor terminar, e o
+`bgp.derivados` recebeu exatamente um evento — 271 dos 273 alertas S1 caem na mesma janela de
+5 min e a emissão é uma por janela, no instante em que o terceiro coletor entra.
+
 ## Fixtures
 
 Os dados de teste são eventos BGP reais capturados em arquivo, nunca inventados à mão.
@@ -106,6 +186,8 @@ Os dados de teste são eventos BGP reais capturados em arquivo, nunca inventados
 | `testes/dados/amostra_live.jsonl` | 2.015 elems do RIS Live, 19 coletores, com IPv6 e retiradas |
 | `testes/dados/hijack_youtube.jsonl` | 24/02/2008, Pakistan Telecom contra o YouTube, 6 coletores independentes |
 | `testes/dados/rib_youtube.jsonl` | dump de RIB anterior ao sequestro, linha de base legítima |
+| `testes/dados/alertas_2008.jsonl` | os 586 alertas que o detector produz sobre a fixture de 2008 |
+| `testes/dados/updates_live.jsonl` | os 2.015 eventos normalizados da amostra ao vivo |
 
 Recapturar ou ampliar:
 
@@ -144,6 +226,6 @@ pronto.
 | 1 · Infraestrutura Kafka | pronta |
 | 2 · Produtor | pronta |
 | 3 · Detector (S1, S2, S3) | pronta |
-| 4 · Derivador Java (D1, D2) | a fazer |
-| 5 · Painel | a fazer |
+| 4 · Derivador Java (D1, D2) | pronta |
+| 5 · Painel e consumidor de ações | pronta |
 | 6 · Ensaio da apresentação | a fazer |
