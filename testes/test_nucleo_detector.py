@@ -174,3 +174,61 @@ def test_caso_de_2008_acende_s1_e_s2_com_17557_como_suspeita():
         "208.65.153.0/25", "208.65.153.128/25"}
     # Tres ou mais coletores independentes viram o desvio: e o que D1 exige.
     assert len({a["coletor"] for a in s1}) >= 3
+
+
+def anuncio_da_rib(nome, prefixo, origem):
+    """Registro de RIB real, re-etiquetado como anuncio.
+
+    Um registro de RIB e o anuncio que o peer tinha guardado: mesmos campos,
+    mesmo AS_PATH. Re-etiquetar R como A e o jeito de exercitar detectar() com
+    dado de MOAS de verdade — medido, nenhum dos prefixos MOAS desta faixa
+    aparece nos 2.015 eventos da amostra ao vivo.
+    """
+    for bruto in carregar(nome):
+        if (bruto["campos"].get("prefix") == prefixo
+                and bruto["campos"].get("as-path", "").split()[-1:] == [str(origem)]):
+            return normalizar({**bruto, "tipo_elem": "A"})
+    raise AssertionError(f"nenhum registro de {prefixo} pela AS {origem} em {nome}")
+
+
+def base_moas():
+    return linha_base(carregar("rib_moas.jsonl"))
+
+
+def test_origem_que_esta_entre_as_legitimas_do_prefixo_nao_gera_s1():
+    base = base_moas()
+    assert base["177.0.0.0/21"] == [7738, 8167]
+    for origem in (7738, 8167):
+        assert detectar(anuncio_da_rib("rib_moas.jsonl", "177.0.0.0/21", origem),
+                        base) == []
+
+
+def test_origem_fora_das_legitimas_do_prefixo_com_moas_gera_s1_com_a_lista():
+    # Excecao consciente a regra de fixture real do CLAUDE.md, no mesmo tom dos
+    # testes de AS_SET e bogon: existe MOAS legitimo capturado e existe sequestro
+    # capturado (2008), mas nao ha captura de sequestro *contra* um prefixo com
+    # MOAS. So a origem e trocada; o resto do evento e o registro de RIB real.
+    base = base_moas()
+    real = anuncio_da_rib("rib_moas.jsonl", "177.0.0.0/21", 7738)
+    evento = {**real, "origem_as": 17557, "as_path": real["as_path"][:-1] + [17557]}
+    s1 = [a for a in detectar(evento, base) if a["situacao"] == "S1"]
+    assert len(s1) == 1
+    assert s1[0]["as_esperado"] == [7738, 8167]
+    assert s1[0]["prefixo_base"] == "177.0.0.0/21"
+
+
+def test_prefixo_da_linha_de_base_ao_vivo_e_julgado_pela_origem_da_rib_de_hoje():
+    """Linha de base real (60 mil prefixos IPv6 do LACNIC, RIB de 30/09/2026)
+    contra evento real do RIS Live: a origem que a RIB registra fica quieta,
+    outra acende S1."""
+    base = json.loads((DADOS.parent.parent / "produtor" / "linha_base_ao_vivo.json")
+                      .read_text(encoding="utf-8"))
+    # updates_live.jsonl ja esta normalizado, entao nao passa por normalizar().
+    evento = next(e for e in carregar("updates_live.jsonl")
+                  if e["prefixo"] == "2806:202::/32" and e["tipo"] == "anuncio")
+    assert base["2806:202::/32"] == evento["origem_as"] == 28458
+    assert detectar(evento, base) == []
+
+    intruso = {**evento, "origem_as": 17557, "as_path": evento["as_path"][:-1] + [17557]}
+    s1 = [a for a in detectar(intruso, base) if a["situacao"] == "S1"]
+    assert [a["as_esperado"] for a in s1] == [28458]

@@ -119,3 +119,19 @@ def test_sequestro_de_2008_foi_visto_por_pelo_menos_tres_coletores_independentes
         if e["prefixo"] == "208.65.153.0/24" and e["origem_as"] == 17557
     }
     assert len(coletores) >= 3, f"o sequestro aparece so em {sorted(coletores)}"
+
+
+def test_linha_base_guarda_as_duas_origens_de_um_prefixo_com_moas():
+    # MOAS legitimo, capturado na RIB de 30/09/2026: 8 pares de origem distintos
+    # em 45 mil prefixos brasileiros. O 177.0.0.0/21 sai pela AS 7738 e pela
+    # AS 8167, que sao a mesma operadora com dois ASNs. Guardar so a ultima que
+    # aparece faria a outra virar falso positivo de S1 a cada anuncio.
+    base = linha_base(carregar("rib_moas.jsonl"))
+    assert base["177.0.0.0/21"] == [7738, 8167]
+
+
+def test_linha_base_mantem_o_as_unico_quando_nao_ha_ambiguidade():
+    # Prefixo sem MOAS continua saindo como int, e nao como lista de um elemento:
+    # e o que mantem o contrato do alerta (`as_esperado`) legivel no caso comum.
+    base = linha_base(carregar("rib_moas.jsonl"))
+    assert base["177.0.128.0/24"] == 400618

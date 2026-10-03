@@ -21,6 +21,8 @@ Uso:
     capturar.py mrt   ARQUIVO --coletor rrc00 [--prefixo 208.65.152.0/22] FONTE...
     capturar.py bgp   ARQUIVO --coletores rrc00,rrc03 --de "2008-02-24 18:45:00" \
                               --ate "2008-02-24 20:30:00" --prefixo 208.65.152.0/22
+    capturar.py bgp   ARQUIVO --registro ribs --arquivo-rib rib.bz2 \
+                              --prefixo "177.0.0.0/8 186.0.0.0/7"
     capturar.py --verificar
 """
 
@@ -207,21 +209,38 @@ def _elems_mrt(caminhos, coletor, rede):
 
 # -------------------------------------------------------------- BGPStream
 
-def _elems_bgpstream(coletores, de, ate, prefixo, tipo_registro="updates"):
+def _elems_bgpstream(coletores, de, ate, prefixo, tipo_registro="updates",
+                     arquivo=None):
     """Le do broker da CAIDA com pybgpstream (libBGPStream 2.3.0 do sistema).
 
     E a unica das tres fontes que cobre varios coletores numa consulta so. Isso
     importa para o D1 da fase 4: a confirmacao do sequestro exige coletores
     independentes concordando, e um arquivo MRT cobre um coletor por vez.
+
+    `arquivo` troca o broker pela interface singlefile, sobre um dump ja baixado.
+    Medido em 30/09/2026: o broker trava ao servir um dump de RIB inteiro (4,9 MB
+    lidos e a thread do wandio para, 0% de CPU, tanto em rrc00 quanto em
+    route-views.saopaulo). Com `curl` + singlefile a mesma libBGPStream le os
+    45 mil prefixos em 36 s. O coletor sai como "singlefile" — linha_base() nao
+    usa esse campo, mas fixture de updates capturada assim perde o coletor.
+
+    `prefixo` aceita varios separados por espaco ("177.0.0.0/8 186.0.0.0/7"):
+    e assim que o parser de filtro da libBGPStream lista valores de um termo.
     """
     import pybgpstream
 
-    kwargs = {"from_time": de, "until_time": ate, "collectors": list(coletores),
-              "record_type": tipo_registro}
-    if prefixo:
-        kwargs["filter"] = f"prefix more {prefixo}"
+    filtro = {"filter": f"prefix more {prefixo}"} if prefixo else {}
+    if arquivo:
+        fluxo = pybgpstream.BGPStream(data_interface="singlefile", **filtro)
+        fluxo.set_data_interface_option(
+            "singlefile", "rib-file" if tipo_registro == "ribs" else "upd-file",
+            str(arquivo))
+    else:
+        fluxo = pybgpstream.BGPStream(
+            from_time=de, until_time=ate, collectors=list(coletores),
+            record_type=tipo_registro, **filtro)
 
-    for elem in pybgpstream.BGPStream(**kwargs):
+    for elem in fluxo:
         campos = {k: v for k, v in elem.fields.items()}
         comunidades = campos.pop("communities", None)
         if comunidades is not None:
@@ -300,7 +319,11 @@ def main(argv=None):
     p.add_argument("--ate", help="fim da janela (modo bgp)")
     p.add_argument("--registro", default="updates", choices=["updates", "ribs"],
                    help="tipo de registro do broker (modo bgp)")
-    p.add_argument("--prefixo", help="so elems contidos neste prefixo")
+    p.add_argument("--prefixo",
+                   help="so elems contidos neste prefixo; no modo bgp aceita "
+                        "varios separados por espaco")
+    p.add_argument("--arquivo-rib",
+                   help="dump MRT ja baixado; le por singlefile em vez do broker")
     args = p.parse_args(argv)
 
     if args.verificar:
@@ -309,15 +332,17 @@ def main(argv=None):
     if not args.fonte or not args.saida:
         p.error("informe a fonte e o arquivo de saida, ou use --verificar")
 
-    rede = ipaddress.ip_network(args.prefixo) if args.prefixo else None
     if args.fonte == "live":
         elems = _elems_ris_live(args.n)
     elif args.fonte == "bgp":
-        if not (args.coletores and args.de and args.ate):
-            p.error("modo bgp exige --coletores, --de e --ate")
-        elems = _elems_bgpstream(args.coletores.split(","), args.de, args.ate,
-                                 args.prefixo, args.registro)
+        if not (args.arquivo_rib or (args.coletores and args.de and args.ate)):
+            p.error("modo bgp exige --arquivo-rib, ou --coletores, --de e --ate")
+        elems = _elems_bgpstream((args.coletores or "").split(","), args.de, args.ate,
+                                 args.prefixo, args.registro, args.arquivo_rib)
     else:
+        # So o modo mrt filtra em Python; o bgp entrega o prefixo ao filtro da
+        # libBGPStream, que aceita uma lista e nao caberia num ip_network().
+        rede = ipaddress.ip_network(args.prefixo) if args.prefixo else None
         elems = _elems_mrt(args.origens, args.coletor, rede)
 
     saida = Path(args.saida)

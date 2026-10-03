@@ -4,7 +4,7 @@ Sem rede, sem Kafka, sem print, sem time.time(), sem estado global. Entra
 dicionario, sai lista de dicionarios. O contrato do evento de entrada e o da
 secao 2 do PLANO.md; o do alerta, o da secao 3.
 
-    S1 · origem inesperada   origem do evento != origem esperada        media
+    S1 · origem inesperada   origem do evento fora das legitimas da base media
     S2 · sub-prefixo         S1 e mais especifico que o prefixo da base  alta
     S3 · caminho invalido    laco, bogon, ou mais especifico que /24     media
 
@@ -22,9 +22,10 @@ import ipaddress
 TETO = {4: 24, 6: 48}  # prefixo mais longo que isto a maior parte da Internet filtra
 
 
-def esperado(prefixo: str, linha_base: dict) -> tuple[int | None, str | None]:
-    """AS legitimo do prefixo exato ou, na falta dele, do mais especifico que o
-    cobre. Devolve (as, prefixo da base) ou (None, None).
+def esperado(prefixo: str, linha_base: dict) -> tuple[int | list[int] | None, str | None]:
+    """Origem legitima do prefixo exato ou, na falta dele, do mais especifico que
+    o cobre. Devolve (origem, prefixo da base) ou (None, None). A origem e um int,
+    ou a lista de origens quando a RIB registra MOAS naquele prefixo.
 
     A RIB de 2008 tem o /22 do YouTube e nao o /24 sequestrado — sem subir para
     o supernet, S1 nunca dispararia no caso de aceitacao.
@@ -88,7 +89,10 @@ def detectar(evento: dict, linha_base: dict) -> list[dict]:
     # origem None e AS_SET: origem ambigua nao vira S1, seria falso positivo.
     # as_legitimo None e prefixo fora da linha de base: sem esperado, sem desvio
     # — e o que mantem o modo --live quieto em vez de gritar sobre a Internet.
-    if origem is not None and as_legitimo is not None and origem != as_legitimo:
+    # MOAS legitimo: a base guarda lista quando os peers da RIB discordam da
+    # origem, e o desvio so existe se a origem estiver fora dela.
+    legitimas = as_legitimo if isinstance(as_legitimo, list) else [as_legitimo]
+    if origem is not None and as_legitimo is not None and origem not in legitimas:
         comum = {"as_esperado": as_legitimo, "prefixo_base": prefixo_base}
         alertas.append(_alerta(evento, "S1", "media",
                                f"origem {origem} difere da esperada {as_legitimo}",

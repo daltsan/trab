@@ -111,7 +111,9 @@ public final class Topologia {
 
         estado.put("prefixo", a.path("prefixo").asText());
         estado.put("as_suspeito", a.path("origem_as").asLong());
-        estado.put("as_legitimo", a.path("as_esperado").asLong());
+        // Copia o no como veio: `as_esperado` e numero quando a RIB concorda sobre a origem e
+        // lista quando ha MOAS legitimo (anycast, multihoming). `asLong()` daria 0 na lista.
+        estado.set("as_legitimo", a.get("as_esperado"));
 
         // "emitir" e transitorio (so o registro que cruza o limiar o carrega); "emitido" e pegajoso,
         // e e o que garante um evento por janela sem precisar esperar a janela fechar.
@@ -128,7 +130,7 @@ public final class Topologia {
         ObjectNode d = MAPPER.createObjectNode();
         d.put("tipo", "sequestro_confirmado");
         d.put("prefixo", estado.path("prefixo").asText());
-        d.put("as_legitimo", estado.path("as_legitimo").asLong());
+        d.set("as_legitimo", estado.get("as_legitimo"));
         d.put("as_suspeito", estado.path("as_suspeito").asLong());
         d.set("coletores", estado.get("coletores"));
         d.put("confianca", confianca(estado.get("coletores").size()));

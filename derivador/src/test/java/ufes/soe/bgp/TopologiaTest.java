@@ -159,6 +159,17 @@ class TopologiaTest {
         assertTrue(d.get("coletores").size() >= 3, "coletores: " + d.get("coletores"));
     }
 
+    @Test
+    void o_as_legitimo_sai_como_lista_quando_o_prefixo_tem_moas_legitimo() {
+        alertas.pipeInput("2804:abc::/32", alertaS1Moas("rrc00", T0 + 1));
+        alertas.pipeInput("2804:abc::/32", alertaS1Moas("rrc01", T0 + 2));
+        alertas.pipeInput("2804:abc::/32", alertaS1Moas("rrc03", T0 + 3));
+
+        JsonNode d = ler(derivados.readValue());
+        assertEquals(ler("[26599,28573]"), d.get("as_legitimo"),
+                "origens legitimas sao um conjunto, achatar para um numero mentiria sobre o dado");
+    }
+
     // ------------------------------------------------------------------ D2
 
     @Test
@@ -253,6 +264,16 @@ class TopologiaTest {
 
     private static String alertaS1(String coletor, double timestamp) {
         return alerta("S1", coletor, timestamp);
+    }
+
+    /** S1 de prefixo com MOAS legitimo: `as_esperado` e a lista de origens validas, nao um AS. */
+    private static String alertaS1Moas(String coletor, double timestamp) {
+        return """
+                {"situacao":"S1","severidade":"media","prefixo":"2804:abc::/32",\
+                "origem_as":17557,"as_esperado":[26599,28573],"prefixo_base":"2804:abc::/32",\
+                "as_path":[6762,3491,17557],"coletor":"%s","peer_as":6762,"timestamp":%s,\
+                "motivo":"origem 17557 fora do conjunto esperado [26599, 28573]"}"""
+                .formatted(coletor, timestamp);
     }
 
     private static String alerta(String situacao, String coletor, double timestamp) {

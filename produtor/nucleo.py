@@ -53,9 +53,19 @@ def normalizar(bruto: dict) -> dict | None:
     return evento
 
 
-def linha_base(registros_rib: Iterable[dict]) -> dict[str, int]:
-    """Dump de RIB -> mapa prefixo -> AS de origem legitimo (base de S1 e S2)."""
-    base = {}
+def linha_base(registros_rib: Iterable[dict]) -> dict[str, int | list[int]]:
+    """Dump de RIB -> mapa prefixo -> origem legitima (base de S1 e S2).
+
+    O valor e um int quando a RIB concorda, e a lista ordenada das origens quando
+    nao concorda. MOAS legitimo e comum — anycast, multihoming, uma operadora com
+    dois ASNs: 179 prefixos em 59.973 na RIB do LACNIC de 30/09/2026. Guardar so
+    a origem do ultimo peer que aparece faria cada uma das outras virar falso
+    positivo de S1 a cada anuncio.
+
+    Concatenar as RIBs de varios coletores antes de chamar isto e o que mantem o
+    falso positivo baixo: peer ralo num coletor esconde MOAS legitimo.
+    """
+    origens = {}
     for elem in registros_rib:
         if elem.get("tipo_elem") != "R":
             continue
@@ -63,5 +73,6 @@ def linha_base(registros_rib: Iterable[dict]) -> dict[str, int]:
         caminho = _caminho(elem["campos"].get("as-path"))
         origem = caminho[-1] if caminho else None
         if prefixo and isinstance(origem, int):
-            base[prefixo] = origem
-    return base
+            origens.setdefault(prefixo, set()).add(origem)
+    return {prefixo: (o.pop() if len(o) == 1 else sorted(o))
+            for prefixo, o in origens.items()}
