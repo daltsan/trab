@@ -97,6 +97,53 @@ A origem esperada vem do prefixo exato na linha de base ou, na falta dele, do pr
 específico que o cobre — o `/24` sequestrado em 2008 só é julgado porque a RIB tem o `/22` que o
 contém. Prefixo fora desse espaço fica quieto, que é o que mantém o modo `--live` silencioso.
 
+### Duas linhas de base
+
+| Arquivo | Origem | Prefixos | Para que serve |
+|---|---|---|---|
+| `produtor/linha_base.json` | `rib_youtube.jsonl`, gerado pelo `ensaio.sh` | 1 | replay de 2008 |
+| `produtor/linha_base_ao_vivo.json` | RIBs de 30/09/2026, `2800::/12` | 59.973 | modo `--live` |
+
+O valor é o **AS de origem** quando a RIB concorda e a **lista de origens** quando não concorda.
+MOAS legítimo existe — anycast, multihoming, uma operadora com dois ASNs — e são 179 prefixos em
+59.973 na RIB de hoje. Guardar só a origem do último peer que aparece faria cada uma das outras
+virar falso positivo de S1 a cada anúncio; S1 dispara quando a origem está **fora** do conjunto.
+No alerta, `as_esperado` continua sendo o AS único quando não há ambiguidade, e a lista quando há.
+
+A faixa é o espaço IPv6 do LACNIC (`2800::/12`, que contém o `2804::/16` brasileiro), escolhida
+medindo e não por palpite: numa captura de 300 mil eventos do RIS Live, **80% do fluxo é IPv6** e
+o LACNIC IPv4 (`177.0.0.0/8 186.0.0.0/7`, 45 mil prefixos) não acendeu **nenhum** S1 em 300 mil
+eventos; o `2800::/12` julga 94% dos eventos da sua faixa e acende S1 ao vivo. O teto de 2 MB do
+arquivo versionado é o que impede levar IPv4 junto: a base IPv6 sozinha já ocupa 1,85 MB.
+
+**São dois coletores, e isso não é excesso de zelo.** Com a RIB do `route-views2.saopaulo`
+sozinha, o `2800:540:2000::/44` tinha um único peer registrando origem 27995 e o detector
+acendeu 242 S1 contra a AS 6535 — vistos por 19 coletores, o bastante para o D1 confirmar um
+sequestro que não existe. A RIB do `rrc00` registra o mesmo bloco por 34 peers, com a AS 6535
+como origem. A união das duas guarda `[6535, 27995]` e o falso positivo some. Peer ralo na RIB é
+a principal fonte de falso positivo de S1: quanto mais peers, mais MOAS legítimo a base conhece.
+
+Regenerar (os `.jsonl` crus somam 750 MB e não são versionados — ficam fora do repositório):
+
+```bash
+# 1. dumps de RIB mais recentes dos dois coletores (a lista sai do broker da CAIDA)
+curl -o /tmp/rrc00.gz  https://data.ris.ripe.net/rrc00/2026.09/bview.20260930.0800.gz
+curl -o /tmp/rv2sp.bz2 \
+    http://archive.routeviews.org/route-views2.saopaulo/bgpdata/2026.09/RIBS/rib.20260930.0400.bz2
+
+# 2. RIB -> elems crus. O broker da CAIDA trava ao servir um dump de RIB inteiro,
+#    então o modo bgp lê o arquivo já baixado, pela interface singlefile.
+.venv/bin/python ferramentas/capturar.py bgp /tmp/rib_a.jsonl \
+    --registro ribs --arquivo-rib /tmp/rrc00.gz  --prefixo "2800::/12"
+.venv/bin/python ferramentas/capturar.py bgp /tmp/rib_b.jsonl \
+    --registro ribs --arquivo-rib /tmp/rv2sp.bz2 --prefixo "2800::/12"
+
+# 3. elems crus dos dois -> linha de base versionada (linha_base() une as origens)
+cat /tmp/rib_a.jsonl /tmp/rib_b.jsonl > /tmp/rib_lacnic6.jsonl
+.venv/bin/python produtor/produtor.py --linha-base /tmp/rib_lacnic6.jsonl \
+    --saida produtor/linha_base_ao_vivo.json
+```
+
 ## Derivador
 
 Aplicação Kafka Streams com duas fontes. D1 consome os alertas **S1** de `bgp.alertas`, agrupa por
@@ -138,12 +185,20 @@ derivado daquele prefixo chega.
 ```bash
 .venv/bin/python painel/painel.py                 # http://localhost:8000
 .venv/bin/python painel/painel.py --porta 9000 --do-inicio --grupo painel-2
+.venv/bin/python painel/painel.py --linhas 40     # mais linhas na tela
 ```
 
 | Rota | Conteúdo |
 |---|---|
 | `/` | página HTML única, CSS embutido, recarga automática a cada 2 s |
 | `/dados` | o mesmo estado em JSON (é o que o teste de integração consulta) |
+
+A tela mostra **as 20 linhas mais relevantes** (`--linhas` muda o corte); ao vivo o estado cresce
+sem parar e sem o corte a página viraria rolagem. Como a ordenação põe os confirmados no topo, o
+que importa nunca cai fora. O `/dados` continua devolvendo o estado inteiro.
+
+No rodapé da página há uma legenda do que é cada situação (S1, S2, S3) e de cada marca
+(`SEQUESTRO CONFIRMADO`, `ROTA INSTAVEL`) — é para quem olha a projeção sem ter lido o código.
 
 A tabela ordena confirmados primeiro, depois por severidade, depois por recência — o prefixo
 sequestrado fica na primeira linha e em vermelho, que é o clímax da apresentação. A recarga é
@@ -162,7 +217,8 @@ notificação no `stderr`, ao lado do painel.
 `ensaio.sh` sobe a demonstração inteira na ordem certa e derruba tudo no fim:
 
 ```bash
-./ensaio.sh              # painel em http://localhost:8000
+./ensaio.sh              # caso de 2008, painel em http://localhost:8000
+./ensaio.sh --ao-vivo    # RIS Live contra a linha de base do LACNIC IPv6
 PORTA=9000 ./ensaio.sh
 ```
 
@@ -171,6 +227,16 @@ detector, painel e derivador em segundo plano (cada um com grupo novo, para não
 anterior), republica `hijack_youtube.jsonl` em `bgp.updates` e fica esperando o
 `sequestro_confirmado` aparecer no `/dados` do painel. `Ctrl-C` derruba o que ele subiu; o broker
 fica de pé, porque quem sobe o `docker compose` é você.
+
+`--ao-vivo` troca as duas pontas e mantém o miolo: usa a `linha_base_ao_vivo.json` versionada em
+vez de gerar a de 2008, põe o produtor em `--live` no lugar do `--arquivo`, e espera o primeiro
+**S1** em vez do `sequestro_confirmado`. O modo padrão não muda.
+
+Medido em 30/09/2026: o primeiro S1 chegou ao painel em **46 s** — `2800:540:2000::/44` anunciado
+pela AS 6429 contra a `[6535, 27995]` da base, visto por **um** coletor só, que é exatamente o
+caso que o D1 recusa confirmar. Em 10 min o painel acumulou 676 prefixos, 151 S3, 2 S1 e 645
+`rota_instavel`. Ao vivo o S1 depende de uma anomalia real acontecer: silêncio é resultado
+legítimo, e por isso o caminho de demonstração continua sendo o replay de 2008.
 
 Medido em 26/09/2026, com o derivador Java no ar: o `sequestro_confirmado` do `208.65.153.0/24`
 (AS 17557 contra a AS 36561) chegou ao painel **16 s** depois do produtor terminar, e o
@@ -188,6 +254,7 @@ Os dados de teste são eventos BGP reais capturados em arquivo, nunca inventados
 | `testes/dados/rib_youtube.jsonl` | dump de RIB anterior ao sequestro, linha de base legítima |
 | `testes/dados/alertas_2008.jsonl` | os 586 alertas que o detector produz sobre a fixture de 2008 |
 | `testes/dados/updates_live.jsonl` | os 2.015 eventos normalizados da amostra ao vivo |
+| `testes/dados/rib_moas.jsonl` | fatia de RIB de 30/09/2026 com 8 pares de origem MOAS reais |
 
 Recapturar ou ampliar:
 

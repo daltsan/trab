@@ -1,0 +1,115 @@
+# Cluster de 3 brokers Kafka em modo KRaft, para demonstrar replicacao, eleicao
+# de lider, tolerancia a falha e distribuicao de particoes.
+#
+#   docker compose -f docker-compose.cluster.yml up -d
+#   ./escalabilidade.sh          sobe este arquivo e roda os dois atos
+#
+# Nao substitui o docker-compose.yml: projeto, rede, portas de host, volumes e
+# nomes de container sao outros, entao os dois sobem ao mesmo tempo sem
+# conflito e o ambiente ja ensaiado continua de pe.
+#
+# Honestidade: tres brokers no mesmo disco e na mesma CPU NAO demonstram vazao
+# horizontal — eles competem pelos mesmos recursos. O que fica provado aqui e
+# replicacao, eleicao de lider, tolerancia a falha e distribuicao de particoes
+# entre consumidores. Vazao exigiria maquinas separadas.
+name: bgp-cluster
+
+x-broker: &broker
+  image: apache/kafka:4.3.1
+  environment: &broker-env
+    CLUSTER_ID: bgp-soe-ufes-cluster
+    KAFKA_PROCESS_ROLES: broker,controller
+    KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093
+    KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+    KAFKA_INTER_BROKER_LISTENER_NAME: INTERNO
+    KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,EXTERNO:PLAINTEXT,INTERNO:PLAINTEXT
+    # Replicar os topicos internos tambem: com fator 1 a queda de um broker
+    # levaria junto os offsets dos grupos, e o ato 2 nao provaria nada.
+    KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+    KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+    KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+    KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    KAFKA_LOG_DIRS: /var/lib/kafka/dados
+    # A maquina tem ~4 GB livres; sem teto cada JVM pega 1/4 da RAM fisica.
+    KAFKA_HEAP_OPTS: -Xmx512m -Xms256m
+  restart: "no"
+
+services:
+  kafka-1:
+    <<: *broker
+    container_name: bgp-kafka-1
+    ports: ["9192:9192"]
+    environment:
+      <<: *broker-env
+      KAFKA_NODE_ID: 1
+      KAFKA_LISTENERS: EXTERNO://:9192,INTERNO://:19092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: EXTERNO://localhost:9192,INTERNO://kafka-1:19092
+    volumes: ["./dados-cluster-1:/var/lib/kafka/dados"]
+    healthcheck:
+      test: ["CMD", "/opt/kafka/bin/kafka-topics.sh", "--bootstrap-server", "localhost:9192", "--list"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+
+  kafka-2:
+    <<: *broker
+    container_name: bgp-kafka-2
+    ports: ["9194:9194"]
+    environment:
+      <<: *broker-env
+      KAFKA_NODE_ID: 2
+      KAFKA_LISTENERS: EXTERNO://:9194,INTERNO://:19092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: EXTERNO://localhost:9194,INTERNO://kafka-2:19092
+    volumes: ["./dados-cluster-2:/var/lib/kafka/dados"]
+    healthcheck:
+      test: ["CMD", "/opt/kafka/bin/kafka-topics.sh", "--bootstrap-server", "localhost:9194", "--list"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+
+  kafka-3:
+    <<: *broker
+    container_name: bgp-kafka-3
+    ports: ["9196:9196"]
+    environment:
+      <<: *broker-env
+      KAFKA_NODE_ID: 3
+      KAFKA_LISTENERS: EXTERNO://:9196,INTERNO://:19092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: EXTERNO://localhost:9196,INTERNO://kafka-3:19092
+    volumes: ["./dados-cluster-3:/var/lib/kafka/dados"]
+    healthcheck:
+      test: ["CMD", "/opt/kafka/bin/kafka-topics.sh", "--bootstrap-server", "localhost:9196", "--list"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+
+  # Mesmas particoes do docker-compose.yml (3/1/1), agora com replicacao 3 e
+  # min.insync.replicas=2: o topico continua aceitando escrita com um broker
+  # fora, e recusa com dois — que e o ponto do ato 2.
+  criar-topicos:
+    image: apache/kafka:4.3.1
+    container_name: bgp-criar-topicos-cluster
+    depends_on:
+      kafka-1: {condition: service_healthy}
+      kafka-2: {condition: service_healthy}
+      kafka-3: {condition: service_healthy}
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      '
+      t() { /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka-1:19092 --create --if-not-exists --replication-factor 3 --config min.insync.replicas=2 --topic "$$1" --partitions "$$2" $$3; };
+      t bgp.updates 3 &&
+      t bgp.alertas 1 &&
+      t bgp.derivados 1 "--config retention.ms=-1"
+      '
+
+  kafka-ui:
+    image: kafbat/kafka-ui:v1.5.0
+    container_name: bgp-kafka-ui-cluster
+    ports: ["8081:8080"]
+    depends_on:
+      kafka-1: {condition: service_healthy}
+    environment:
+      KAFKA_CLUSTERS_0_NAME: bgp-cluster-3
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka-1:19092,kafka-2:19092,kafka-3:19092
+      JAVA_OPTS: -Xmx256m

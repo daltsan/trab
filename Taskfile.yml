@@ -1,0 +1,83 @@
+# https://taskfile.dev — `task` lista as tarefas.
+#   task ensaio -- --ao-vivo     repassa flag ao ensaio.sh
+#   task detector BASE=produtor/linha_base_ao_vivo.json
+version: "3"
+
+vars:
+  PY: .venv/bin/python
+  BASE: produtor/linha_base.json
+  PORTA: 8000
+  KAFKA_SH: docker compose exec -T kafka /opt/kafka/bin
+  BROKER: localhost:9092
+
+tasks:
+  default:
+    cmds: [task --list]
+    silent: true
+
+  # --- infraestrutura ---
+  up:
+    desc: Sobe Kafka, Kafka UI e cria os topicos
+    cmds:
+      - docker compose up -d
+      - until {{.KAFKA_SH}}/kafka-topics.sh --bootstrap-server {{.BROKER}} --list >/dev/null 2>&1; do sleep 1; done
+      - echo "kafka pronto em {{.BROKER}} (UI em http://localhost:8080)"
+
+  down:
+    desc: Derruba os containers (dados-kafka/ continua no disco)
+    cmds: [docker compose down]
+
+  clean:
+    desc: Apaga topicos e grupos de consumidores, depois recria os topicos
+    deps: [subir]
+    cmds:
+      - |
+        for g in $({{.KAFKA_SH}}/kafka-consumer-groups.sh --bootstrap-server {{.BROKER}} --list); do
+          {{.KAFKA_SH}}/kafka-consumer-groups.sh --bootstrap-server {{.BROKER}} --delete --group "$g" || true
+        done
+      - |
+        for t in $({{.KAFKA_SH}}/kafka-topics.sh --bootstrap-server {{.BROKER}} --list | grep -v '^__'); do
+          {{.KAFKA_SH}}/kafka-topics.sh --bootstrap-server {{.BROKER}} --delete --topic "$t"
+        done
+      # a delecao e assincrona: espera sumirem antes de recriar
+      - until [ -z "$({{.KAFKA_SH}}/kafka-topics.sh --bootstrap-server {{.BROKER}} --list | grep -v '^__')" ]; do sleep 1; done
+      - docker compose up criar-topicos
+
+  # --- cadeia inteira (scripts existentes) ---
+  ensaio:
+    desc: Ensaio do sequestro de 2008 (task ensaio -- --ao-vivo para o modo ao vivo)
+    cmds: ['PORTA={{.PORTA}} ./ensaio.sh {{.CLI_ARGS}}']
+
+  ao-vivo:
+    desc: RIS Live contra a linha de base real
+    cmds: ['PORTA={{.PORTA}} ./ensaio.sh --ao-vivo']
+
+  # --- componentes, um por terminal ---
+  linha-base:
+    desc: Gera produtor/linha_base.json a partir do dump de RIB do YouTube
+    cmds:
+      - '{{.PY}} produtor/produtor.py --linha-base testes/dados/rib_youtube.jsonl --saida produtor/linha_base.json'
+    generates: [produtor/linha_base.json]
+    sources: [testes/dados/rib_youtube.jsonl]
+
+  detector:
+    desc: Detector (BASE=... escolhe a linha de base)
+    deps: [linha-base]
+    cmds: ['{{.PY}} detector/detector.py --linha-base {{.BASE}}']
+
+  produtor:
+    desc: Produtor, replay da fixture de 2008
+    cmds: ['{{.PY}} produtor/produtor.py --arquivo testes/dados/hijack_youtube.jsonl --velocidade 300']
+
+  produtor-live:
+    desc: Produtor, RIS Live
+    cmds: ['{{.PY}} produtor/produtor.py --live']
+
+  derivador:
+    desc: Derivador Kafka Streams
+    dir: derivador
+    cmds: ['JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java)))) ./gradlew run --console=plain']
+
+  painel:
+    desc: Painel em http://localhost:{{.PORTA}}
+    cmds: ['{{.PY}} painel/painel.py --porta {{.PORTA}}']

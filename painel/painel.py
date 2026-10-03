@@ -74,6 +74,10 @@ def consumir(consumidor, parar: threading.Event) -> None:
             print(notificar(mensagem), file=sys.stderr, flush=True)
 
 
+LINHAS = 20  # quantas linhas a tela mostra; /dados continua devolvendo tudo
+LINHAS_NA_TELA = LINHAS  # sobrescrito por --linhas
+
+
 def ordenar(estado: dict) -> list:
     """Confirmados primeiro, depois severidade, depois recencia."""
     return sorted(estado.values(),
@@ -94,11 +98,27 @@ td.prefixo{font-family:ui-monospace,monospace}
 .sev-alta{color:#ff6b6b}.sev-media{color:#ffcc66}.sev-baixa{color:#8a93a3}
 .marca{background:#c0192b;color:#fff;padding:1px 6px;border-radius:3px;font-size:12px}
 .vazio{color:#8a93a3;padding:24px 0}
+.legenda{margin-top:20px;padding-top:14px;border-top:1px solid #222831;color:#8a93a3;font-size:13px}
+.legenda b{color:#e6e6e6}.legenda span{display:inline-block;margin-right:22px}
 """
 
 
-def pagina(estado: dict) -> str:
-    linhas = ordenar(estado)
+LEGENDA = (
+    "<p class=legenda>"
+    "<span><b>S1</b> origem inesperada: outro AS anuncia o bloco</span>"
+    "<span><b>S2</b> sub-prefixo: bloco mais especifico que o da linha de base</span>"
+    "<span><b>S3</b> caminho invalido: laco no AS_PATH, bogon, ou mais especifico que /24</span>"
+    "<br><span><b>SEQUESTRO CONFIRMADO</b> 3 coletores independentes viram o mesmo desvio na janela</span>"
+    "<span><b>ROTA INSTAVEL</b> anuncio e retirada alternando acima do limiar</span>"
+    "</p>")
+
+
+def pagina(estado: dict, limite: int = LINHAS) -> str:
+    """Mostra so as `limite` linhas mais relevantes: ao vivo o estado cresce sem
+    parar e a tela viraria rolagem. A ordenacao poe confirmados no topo, entao o
+    que importa nunca cai fora do corte."""
+    todas = ordenar(estado)
+    linhas = todas[:limite]
     corpo = "".join(
         "<tr class='{cls}'><td class=prefixo>{pref}</td><td>{marca}</td>"
         "<td class='sev-{sev}'>{sev}</td><td>{sit}</td><td>{col}</td>"
@@ -118,12 +138,14 @@ def pagina(estado: dict) -> str:
     tabela = (f"<table><tr><th>prefixo<th>situacao<th>severidade<th>alertas"
               f"<th>coletores<th>AS suspeito<th>AS legitimo</tr>{corpo}</table>"
               if linhas else "<p class=vazio>esperando alertas em bgp.alertas…</p>")
+    corte = (f" · mostrando os {len(linhas)} mais relevantes"
+             if len(todas) > len(linhas) else "")
     return (f"<!doctype html><meta charset=utf-8>"
             f"<meta http-equiv=refresh content=2>"
             f"<title>Monitoramento BGP</title><style>{ESTILO}</style>"
             f"<h1>Monitoramento BGP</h1>"
-            f"<p class=sub>{len(linhas)} prefixos · bgp.alertas + bgp.derivados</p>"
-            f"{tabela}")
+            f"<p class=sub>{len(todas)} prefixos{corte} · bgp.alertas + bgp.derivados</p>"
+            f"{tabela}{LEGENDA}")
 
 
 class Manipulador(BaseHTTPRequestHandler):
@@ -133,7 +155,7 @@ class Manipulador(BaseHTTPRequestHandler):
         if self.path.startswith("/dados"):
             corpo, tipo = json.dumps(copia, ensure_ascii=False), "application/json"
         elif self.path == "/":
-            corpo, tipo = pagina(copia), "text/html"
+            corpo, tipo = pagina(copia, LINHAS_NA_TELA), "text/html"
         else:
             self.send_error(404)
             return
@@ -156,7 +178,12 @@ def main(argv=None):
                    help="grupo novo comeca no inicio dos topicos, e nao no fim")
     p.add_argument("--grupo", default=GRUPO)
     p.add_argument("--broker", default=BROKER)
+    p.add_argument("--linhas", type=int, default=LINHAS,
+                   help=f"quantas linhas a tela mostra (padrao {LINHAS}); /dados devolve tudo")
     args = p.parse_args(argv)
+
+    global LINHAS_NA_TELA
+    LINHAS_NA_TELA = args.linhas
 
     from confluent_kafka import Consumer
 
